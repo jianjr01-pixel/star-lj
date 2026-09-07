@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TITAN-STAR AI 維修視覺化分析系統</title>
+    <!-- 引入樣式庫與圖表庫 -->
+    <style>
+        body { font-family: "Segoe UI", Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0066cc; padding-bottom: 10px; margin-bottom: 20px; }
+        .upload-zone { border: 2px dashed #0066cc; padding: 30px; text-align: center; background: #f0f7ff; border-radius: 8px; cursor: pointer; }
+        .btn { background: #0066cc; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 14px; }
+        .btn:hover { background: #004c99; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .ai-box { background: #f8f9fa; border-left: 4px solid #0066cc; padding: 15px; border-radius: 0 8px 8px 0; font-size: 15px; line-height: 1.6; white-space: pre-line; }
+        input[type="text"] { width: 300px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    </style>
+    <!-- 1. SheetJS (讀取 Excel) -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <!-- 2. Chart.js (繪製圖表) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h2>◈ TITAN-STAR 維修視覺化 & AI 診斷系統</h2>
+        <div>
+            <label>Gemini API Key: </label>
+            <input type="password" id="apiKey" placeholder="貼上免費的 Gemini API Key">
+        </div>
+    </div>
+
+    <!-- 上傳區塊 -->
+    <div class="card">
+        <div class="upload-zone" onclick="document.getElementById('excelFile').click()">
+            📊 <b>點擊上傳月度維修報表 (.xlsx / .xls)</b>
+            <p style="color: #666; font-size: 13px; margin-top: 5px;">資料直接在您的瀏覽器本機端解析，不需傳送至外部伺服器儲存</p>
+            <input type="file" id="excelFile" accept=".xlsx, .xls" style="display:none">
+        </div>
+        <div id="statusMsg" style="margin-top: 10px; font-weight: bold; text-align: center;"></div>
+    </div>
+
+    <!-- 分析結果區域 (預設隱藏) -->
+    <div id="dashboard" style="display: none;">
+        
+        <!-- AI 智慧主管摘要 -->
+        <div class="card">
+            <h3>💡 AI 品質工程師 - 主管摘要與改善建議</h3>
+            <div id="aiSummary" class="ai-box">正在等待 AI 分析數據...</div>
+        </div>
+
+        <!-- 圖表分析區 -->
+        <div class="grid-2">
+            <div class="card">
+                <h3>❖ 機種故障件數排名 TOP 5</h3>
+                <canvas id="modelChart"></canvas>
+            </div>
+            <div class="card">
+                <h3>🧩 主要更換零件 Pareto 分布</h3>
+                <canvas id="partChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let modelChartInst = null;
+let partChartInst = null;
+
+// 監聽 Excel 上傳
+document.getElementById('excelFile').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    document.getElementById('statusMsg').innerText = "⏳ 正在讀取並解析 Excel...";
+    
+    const reader = new FileReader();
+    reader.onload = async function(event) {
+        try {
+            const data = new Uint8Array(event.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            
+            // 讀取第一個工作表
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+            if (jsonData.length === 0) {
+                alert("Excel 內沒有發現數據！");
+                return;
+            }
+
+            document.getElementById('statusMsg').innerText = `✅ 成功讀取 ${jsonData.length} 筆維修紀錄！`;
+            document.getElementById('dashboard').style.display = 'block';
+
+            // 1. 本地端資料統計與視覺化
+            processLocalAnalysis(jsonData);
+
+            // 2. 呼叫 AI 進行進階診斷
+            const apiKey = document.getElementById('apiKey').value.trim();
+            if (apiKey) {
+                callGeminiAI(jsonData, apiKey);
+            } else {
+                document.getElementById('aiSummary').innerText = "💡 請在上方的「Gemini API Key」輸入框貼上 Key，即可自動解鎖 AI 品質工程師的主管摘要與 CAPA 改善建議！";
+            }
+
+        } catch (err) {
+            console.error(err);
+            alert("Excel 解析失敗，請檢查欄位格式。");
+        }
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+// 統計數據並繪製圖表
+function processLocalAnalysis(data) {
+    // 假設 Excel 欄位包含「機種」與「零件名稱」(可依實際 Excel 欄位名稱自動彈性調整)
+    const modelCounts = {};
+    const partCounts = {};
+
+    data.forEach(row => {
+        // 尋找可能的欄位名稱
+        const model = row['機種'] || row['型號'] || row['Model'] || '未知機種';
+        const part = row['零件名稱'] || row['零件'] || row['故障零件'] || row['Part'] || '未知零件';
+
+        modelCounts[model] = (modelCounts[model] || 0) + 1;
+        partCounts[part] = (partCounts[part] || 0) + 1;
+    });
+
+    // 排序取得 TOP 5
+    const topModels = Object.entries(modelCounts).sort((a,b) => b[1] - a[1]).slice(0, 5);
+    const topParts = Object.entries(partCounts).sort((a,b) => b[1] - a[1]).slice(0, 5);
+
+    // 繪製機種圖表
+    renderChart('modelChart', 'bar', topModels.map(x=>x[0]), topModels.map(x=>x[1]), '維修件數', '#0066cc');
+    // 繪製零件圖表
+    renderChart('partChart', 'doughnut', topParts.map(x=>x[0]), topParts.map(x=>x[1]), '更換數量', ['#ff6384', '#36a2eb', '#cc65fe', '#ffce56', '#4bc0c0']);
+}
+
+function renderChart(canvasId, type, labels, data, labelName, colors) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    if (canvasId === 'modelChart' && modelChartInst) modelChartInst.destroy();
+    if (canvasId === 'partChart' && partChartInst) partChartInst.destroy();
+
+    const chartConfig = {
+        type: type,
+        data: {
+            labels: labels,
+            datasets: [{
+                label: labelName,
+                data: data,
+                backgroundColor: colors
+            }]
+        },
+        options: { responsive: true, plugins: { legend: { display: type !== 'bar' } } }
+    };
+
+    if (canvasId === 'modelChart') modelChartInst = new Chart(ctx, chartConfig);
+    if (canvasId === 'partChart') partChartInst = new Chart(ctx, chartConfig);
+}
+
+// 呼叫 Gemini AI 免費 API 進行報告撰寫
+async function callGeminiAI(data, apiKey) {
+    const aiBox = document.getElementById('aiSummary');
+    aiBox.innerText = "🤖 AI 品質工程師正在分析維修數據與根因中...";
+
+    // 取前 50 筆摘要送給 AI 分析 (避免長度超出)
+    const sampleData = data.slice(0, 50);
+
+    const prompt = `你是一位專業的安防設備品質與維修分析工程師。以下是本月維修報表的前 50 筆採樣數據 JSON：
+${JSON.stringify(sampleData)}
+
+請依據數據回答以下三點，並用繁體中文回覆：
+1. 【主管摘要】：列出本期最主要的故障機種與核心問題。
+2. 【異常偵測與風險警示】：是否有集中於特定零件或不良模式的跡象？
+3. 【CAPA 建議行動】：針對高頻故障，提出 2 點品質改善或備料建議。`;
+
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+
+        const resData = await response.json();
+        if (resData.candidates && resData.candidates[0]) {
+            aiBox.innerText = resData.candidates[0].content.parts[0].text;
+        } else {
+            aiBox.innerText = "❌ AI 分析回應失敗，請檢查 API Key 是否正確。";
+        }
+    } catch (err) {
+        aiBox.innerText = "❌ 連線至 AI 服務失敗：" + err.message;
+    }
+}
+</script>
+
+</body>
+</html>
