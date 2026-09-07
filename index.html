@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TITAN-STAR AI 維修視覺化分析系統</title>
+    <title>STAR-lj AI 維修視覺化分析系統</title>
     <!-- 引入樣式庫與圖表庫 -->
     <style>
         body { font-family: "Segoe UI", Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; color: #333; }
@@ -161,18 +161,22 @@ function renderChart(canvasId, type, labels, data, labelName, colors) {
     if (canvasId === 'partChart') partChartInst = new Chart(ctx, chartConfig);
 }
 
-// 呼叫 Gemini AI 免費 API 進行報告撰寫
+// 呼叫 Gemini AI 免費 API (含詳細除錯與資料精簡)
 async function callGeminiAI(data, apiKey) {
     const aiBox = document.getElementById('aiSummary');
     aiBox.innerText = "🤖 AI 品質工程師正在分析維修數據與根因中...";
 
-    // 取前 50 筆摘要送給 AI 分析 (避免長度超出)
-    const sampleData = data.slice(0, 50);
+    // 精簡欄位，只挑選核心資訊送給 AI，節省 Token 並提升成功率
+    const sampleData = data.slice(0, 30).map(item => ({
+        機種: item['機種'] || item['型號'] || item['Model'] || '',
+        故障原因: item['故障原因'] || item['故障描述'] || item['Reason'] || '',
+        零件: item['零件名稱'] || item['零件'] || item['Part'] || ''
+    }));
 
-    const prompt = `你是一位專業的安防設備品質與維修分析工程師。以下是本月維修報表的前 50 筆採樣數據 JSON：
+    const prompt = `你是一位專業的安防設備品質與維修分析工程師。以下是本月維修報表採樣數據：
 ${JSON.stringify(sampleData)}
 
-請依據數據回答以下三點，並用繁體中文回覆：
+請依據數據回答以下三點，並用繁體中文簡潔回覆：
 1. 【主管摘要】：列出本期最主要的故障機種與核心問題。
 2. 【異常偵測與風險警示】：是否有集中於特定零件或不良模式的跡象？
 3. 【CAPA 建議行動】：針對高頻故障，提出 2 點品質改善或備料建議。`;
@@ -185,13 +189,25 @@ ${JSON.stringify(sampleData)}
         });
 
         const resData = await response.json();
-        if (resData.candidates && resData.candidates[0]) {
+
+        // 💡 如果 Google 回傳錯誤，直接將詳細原因顯示在畫面上！
+        if (!response.ok || resData.error) {
+            const code = resData.error ? resData.error.code : response.status;
+            const message = resData.error ? resData.error.message : '未知錯誤';
+            console.error("Google API 錯誤詳情:", resData);
+            
+            aiBox.innerText = `❌ API 呼叫失敗 (代碼 ${code})：\n${message}\n\n請對照下方常見原因排查。`;
+            return;
+        }
+
+        if (resData.candidates && resData.candidates[0] && resData.candidates[0].content) {
             aiBox.innerText = resData.candidates[0].content.parts[0].text;
         } else {
-            aiBox.innerText = "❌ AI 分析回應失敗，請檢查 API Key 是否正確。";
+            aiBox.innerText = "⚠️ AI 收到請求但未產生內容，可能被安全過濾器攔截。";
         }
     } catch (err) {
-        aiBox.innerText = "❌ 連線至 AI 服務失敗：" + err.message;
+        console.error("網路連線錯誤:", err);
+        aiBox.innerText = "❌ 網路連線失敗：" + err.message;
     }
 }
 </script>
